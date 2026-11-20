@@ -9,7 +9,7 @@ The local protobuf records sent back by Google's `daily-cloudcode-pa.googleapis.
    - Starting **Nov 17**, selecting `Gemini 4 Hydrogen (High)` silently switched from `gemini-4-hydrogen` (`enum 1525`, avg reasoning `1,673–2,630` tokens) to **`gemini-4-hydrogen-tiered-high`** (`enum 1530`, avg reasoning cut >60% to `369–628` tokens).
    - **6,699 calls** labeled in UI metadata as `Gemini 4 Hydrogen (Orchestrator)` actually executed against an undocumented **`gemini-flash-worker-agy`** (`enum 1669`) endpoint.
 3. **`thinking_tokens = 0` Pipeline Regressions:** On `Gemini 4 Argon (Medium)`, calls returning `thinking_tokens = 0` jumped from **`0.3%` (`1/337`)** on Nov 12–13 to **`25.2%`** on Nov 16 and **`64.9%` (`50/77`, median thinking = `0`)** on Nov 19. On Nov 17, `Gemini 4 Carbon (Low)` hit **`100%` (`7/7`)** zero-thinking calls before recovering on Nov 20.
-4. **The Google One "Storage Hostage" Support Catch-22:** Empty failed server responses still drained paid quota until triggering `HTTP 429 RESOURCE_EXHAUSTED`. Yet when presented with exact server `ResponseID`s, Google One Tier-1 Support initially stated that *"all sales are final"* and that issuing a courtesy refund **immediately cancels the entire Google One membership and revokes 30 TB Google Drive/Gmail storage**—forcing subscribers with multi-terabyte Drive data to choose between absorbing server billing bugs or having their email/storage locked.
+4. **Bundled Google One Storage Billing Catch-22:** Empty failed server responses still drained paid quota until triggering `HTTP 429 RESOURCE_EXHAUSTED`. Yet when presented with exact server `ResponseID`s, Google One Tier-1 Support initially stated that *"all sales are final"* and that issuing a courtesy refund **immediately cancels the entire Google One membership and revokes 30 TB Google Drive/Gmail storage**—forcing subscribers with multi-terabyte Drive data to choose between absorbing server billing bugs or having their email/storage locked.
 
 Included in this repository:
 * **[`audit_antigravity_sqlite.py`](./audit_antigravity_sqlite.py)** — ~220-line zero-dependency, read-only Python 3 script so any Pro/Ultra subscriber on macOS, Linux, or Windows can audit their own local `~/.gemini/antigravity/conversations/*.db` files in 5 seconds.
@@ -100,7 +100,7 @@ ResponseIDs: wHT-apWMLs_l****, y3T-auazErDc****, -XT-avTQFv_b****, KXX-aoCaH__b*
 
 ---
 
-## 5. The Google One Support Catch-22 ("Storage Hostage" Policy)
+## 5. Bundled Google One Storage Billing Catch-22 (PSA for Subscribers)
 
 Because Google bundles developer AI Ultra quotas with **Google One cloud storage (30 TB)** under a single **$199.99/month** subscription, I contacted Google One Support (full PII-scrubbed chat log in [`SUPPORT_TRANSCRIPT_REDACTED.md`](./SUPPORT_TRANSCRIPT_REDACTED.md)) with the exact server `ResponseID`s and SQLite telemetry requesting a **non-cancelling service credit** for the Nov 15–20 regression window.
 
@@ -109,13 +109,13 @@ Because Google bundles developer AI Ultra quotas with **Google One cloud storage
 
 ![Google One Support Storage Hostage Catch-22](./images/02_support_storage_hostage.png)
 
-* For any subscriber storing `>15 GB` (in my case, **3.5 TB** across Google Drive and Gmail), immediate cancellation locks Gmail send/receive and freezes Drive writes—effectively turning bundled cloud storage into a **switching/refund hostage** when AI compute quotas malfunction.
+* For any subscriber storing `>15 GB` (in my case, **3.5 TB** across Google Drive and Gmail), immediate cancellation locks Gmail send/receive and freezes Drive writes—creating a structural catch-22 where subscribers with >15 GB of data cannot accept standard Tier-1 refund relief for AI outages without disrupting Gmail and Drive.
 * **Tier-2 Escalation Outcome:** Only *after* explicitly rejecting the cancellation trap and uploading the raw SQLite `gen_metadata` protobuf traces + server `ResponseID`s did Tier-2 Support reverse the initial "impossible/immediate-cancellation" stance and offer in writing:
   > *"May I please know how would you like us to proceed as we can offer you either 2,000 AI credits or a refund of your last plan charge without cancelling your plan?"*
   *(Selected the non-cancelling full refund of the last monthly charge; Support subsequently clarified that this option remains "under review for approval" by their higher specialists team via email with no committed timeframe.)*
 
 ![Google One Tier-2 Reversal After Raw SQLite Telemetry](./images/03_tier2_reversal_after_telemetry.png)
-* **Takeaway for Pro & Ultra Subscribers:** Google's Tier-1 support defaults to deterring valid defect claims by threatening immediate termination of bundled Google Drive/Gmail storage, and even when presented with hard server `ResponseID`s, non-cancelling compensation is gated behind opaque, open-ended "higher specialist" review with no committed SLA.
+* **Takeaway for Pro & Ultra Subscribers:** Tier-1 agents are constrained to a standard Google One cancellation-refund workflow that terminates Drive/Gmail storage; subscribers seeking compensation for AI quota bugs without losing storage must explicitly decline Tier-1 cancellation and escalate to Tier-2 with raw server `ResponseID`s (which remains subject to manual review with no committed SLA).
 
 ---
 
