@@ -107,10 +107,10 @@ Because Google bundles developer AI Ultra quotas with **Google One cloud storage
 * **Initial Tier-1 Support Stance:** Even after reviewing the issue, Google One Support initially stated:
   > *"Google storage plan purchases are non-refundable... Per our Terms of Service, all sales are final. Before we proceed to request for a refund of your membership, I would like to let you know that when a Google One membership is refunded, it's cancelled immediately and you will no longer have access to expanded storage, benefits, and expert support offered by Google One."*
 
-![Google One Support Storage Hostage Catch-22](./images/02_support_storage_hostage.png)
+![Google One Bundled Storage Billing Catch-22](./images/02_support_storage_hostage.png)
 
 * For any subscriber storing `>15 GB` (in my case, **3.5 TB** across Google Drive and Gmail), immediate cancellation locks Gmail send/receive and freezes Drive writes—creating a structural catch-22 where subscribers with >15 GB of data cannot accept standard Tier-1 refund relief for AI outages without disrupting Gmail and Drive.
-* **Tier-2 Escalation Outcome:** Only *after* explicitly rejecting the cancellation trap and uploading the raw SQLite `gen_metadata` protobuf traces + server `ResponseID`s did Tier-2 Support reverse the initial "impossible/immediate-cancellation" stance and offer in writing:
+* **Tier-2 Escalation Outcome:** Only *after* explicitly declining standard cancellation and uploading the raw SQLite `gen_metadata` protobuf traces + server `ResponseID`s did Tier-2 Support reverse the initial "impossible/immediate-cancellation" stance and offer in writing:
   > *"May I please know how would you like us to proceed as we can offer you either 2,000 AI credits or a refund of your last plan charge without cancelling your plan?"*
   *(Selected the non-cancelling full refund of the last monthly charge; Support subsequently clarified that this option remains "under review for approval" by their higher specialists team via email with no committed timeframe.)*
 
