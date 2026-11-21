@@ -152,9 +152,10 @@ Because Google bundles developer AI Ultra compute with **Google One 30 TB storag
 Standard Python 3 only — zero dependencies, `?immutable=1` read-only mode, zero network calls, never reads prompts or credentials:
 
 ```bash
+# Focus on everything after Nov 15 (recommended — Google owes paying subscribers a clear explanation for this window):
+python3 audit_antigravity_sqlite.py --since 2026-11-15
+# Full history across all dates:
 python3 audit_antigravity_sqlite.py
-# Optional date window filter:
-python3 audit_antigravity_sqlite.py --since 2026-11-15 --until 2026-11-20
 # Optional custom directory:
-python3 audit_antigravity_sqlite.py /path/to/custom/antigravity
+python3 audit_antigravity_sqlite.py /path/to/custom/antigravity --since 2026-11-15
 ```
