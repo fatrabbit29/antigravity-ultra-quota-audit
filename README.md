@@ -1,134 +1,160 @@
-# Forensic Audit of 23,515 Google AI Ultra (20x) Billing Records in Google Antigravity
+# Forensic Audit of 23,302 Unique Google AI Ultra (20x) Billing Records in Google Antigravity
 
-**TL;DR:** After noticing severe reasoning degradation and rapid quota exhaustion starting around **November 15, 2026** on a paid **Google One AI Ultra (20x tier, $199.99/month)** subscription, I audited the raw `gen_metadata` protobuf billing records across all **373 local SQLite conversation databases** (`23,515` model invocations between Nov 12 and Nov 20, 2026) written by Google Antigravity.
+> **v1.1 Independent Re-Audit & Hardening Update (Nov 21, 2026):**
+> Following a self-imposed adversarial code & data audit before publishing a companion breakdown, `audit_antigravity_sqlite.py` has been upgraded to **v1.1** with:
+> 1. **Strict `ResponseID` (`usage.11`) deduplication** across forked/Swarm/backup DBs (removing `791` duplicate rows from forked conversations);
+> 2. **Strict real per-step timestamp gating** (excluding any row lacking real `transcript.jsonl` step timestamps from inter-turn gap math — never falling back to file `mtime`);
+> 3. **Algebraic schema self-verification** (`usage.3 == usage.9 + usage.10`: **`24,319 exact / 0 mismatches`**);
+> 4. **Zero-loophole trace replacement**: Replaced the earlier `41090d3c` `idx=189` row (which followed a 14m05s idle gap before `idx=190`'s genuine 25s bug) with 100% continuous `<30s` single-model wipes (`d4eb10d7` `+28s` / `350,781` uncached on `Carbon High`; `14e9dadb` `+24s` / `502,806` uncached on `Argon Medium`), refined `gemini-4-hydrogen-tiered-high` reporting to full percentiles (`mean -55.5%`, `p95 -73%`, `p50` flat), refined `e42289d0` image-429 to its exact `9/11` failures (`7` consecutive right before `HTTP 429`, `2` images delivered), added the **post-hotfix 3 structural cache leaks** + **fair Claude Code comparison** + **measured latency/time cost**, and added a note that Tier-1 Support politely sent a post-chat confirmation email stating escalation to higher specialists (still with no timeline or decision yet).
+>
+> **Headline result after strict v1.1 deduplication & timestamp gating:** Overbilled Gemini uncached input (`<=300s`, Nov 15–20) is **`50,650,659` tokens** (`28,028,445` even under `<=45s`); hosted Claude in the exact same Antigravity client remains **`0 / 623` (`<=45s`)** and **`0 / 648` (`<=300s`)** zero-cache failures.
 
-The local protobuf records sent back by Google's `daily-cloudcode-pa.googleapis.com` backend reveal four verifiable issues:
+---
 
-1. **Severe Server-Side `0%` KV Cache Regression (~49.5M Uncached Tokens Overbilled):** Between Nov 15 and Nov 19, Gemini 4 endpoints repeatedly dropped `cached_input_tokens` to `0` on consecutive turns `<25s` apart (with zero context compaction), billing tens of millions of full-price uncached input tokens against paid 5-hour/7-day subscriber pools. By contrast, **hosted Anthropic Claude Opus/Sonnet 5.5 running inside the exact same Antigravity client had `0` (`0.0%`) zero-cache turns across 623 strict consecutive follow-ups**.
-2. **Undisclosed `-tiered` & `flash-worker` Backend Model Substitution:** Comparing the UI model label (`chatModel.field_21`) against the actual server-executed model ID (`chatModel.field_19`) shows:
-   - Starting **Nov 17**, selecting `Gemini 4 Hydrogen (High)` silently switched from `gemini-4-hydrogen` (`enum 1525`, avg reasoning `1,673–2,630` tokens) to **`gemini-4-hydrogen-tiered-high`** (`enum 1530`, avg reasoning cut >60% to `369–628` tokens).
-   - **6,699 calls** labeled in UI metadata as `Gemini 4 Hydrogen (Orchestrator)` actually executed against an undocumented **`gemini-flash-worker-agy`** (`enum 1669`) endpoint.
-3. **`thinking_tokens = 0` Pipeline Regressions:** On `Gemini 4 Argon (Medium)`, calls returning `thinking_tokens = 0` jumped from **`0.3%` (`1/337`)** on Nov 12–13 to **`25.2%`** on Nov 16 and **`64.9%` (`50/77`, median thinking = `0`)** on Nov 19. On Nov 17, `Gemini 4 Carbon (Low)` hit **`100%` (`7/7`)** zero-thinking calls before recovering on Nov 20.
-4. **Bundled Google One Storage Billing Catch-22:** Empty failed server responses still drained paid quota until triggering `HTTP 429 RESOURCE_EXHAUSTED`. Yet when presented with exact server `ResponseID`s, Google One Tier-1 Support initially stated that *"all sales are final"* and that issuing a courtesy refund **immediately cancels the entire Google One membership and revokes 30 TB Google Drive/Gmail storage**—forcing subscribers with multi-terabyte Drive data to choose between absorbing server billing bugs or having their email/storage locked.
+**TL;DR:** After noticing degraded output quality and rapid quota exhaustion starting **November 15, 2026** on a paid **Google One AI Ultra (20x tier, $199.99/month)** subscription, I audited the raw `gen_metadata` protobuf billing records across all **383 local SQLite conversation databases** (`23,302` `ResponseID`-deduplicated calls between Nov 12 and Nov 20, 2026) written by Google Antigravity.
+
+The native protobuf records returned by Google's `daily-cloudcode-pa.googleapis.com` backend reveal five verifiable issues:
+
+1. **Server-Side `0%` KV Cache Overbilling (`50.65M` Uncached Tokens `<=300s`, `28.03M` `<=45s`):** Between Nov 15 and Nov 20, Gemini 4 endpoints repeatedly dropped `cached_input_tokens` to `0` on continuous same-model turns `<30s` apart (zero compaction, zero errors), billing tens of millions of full-price uncached input tokens against paid 5h/7d subscriber pools. By contrast, **hosted Anthropic Claude Opus/Sonnet 5.5 inside the exact same Antigravity client had `0` (`0.0%`) zero-cache turns across `623` (`<=45s`) and `648` (`<=300s`) strict follow-ups**.
+2. **Undisclosed `-tiered` & `flash-worker` Backend Routing:** Comparing UI display labels (`field_21`) against actual server-executed model IDs (`field_19`):
+   - Starting **Nov 17**, selecting `Gemini 4 Hydrogen (High)` silently switched from `gemini-4-hydrogen` (`enum 1525`, `n=195`) to **`gemini-4-hydrogen-tiered-high`** (`enum 1530`, `n=1,504`): mean reasoning fell **`55.5%`** (`1,053 → 469`), and high-end deep reasoning (`p95`) was cut **`73%`** (`5,535 → 1,498`), while median (`p50`) stayed flat (`279 → 248`).
+   - **`6,314` deduplicated calls** labeled `Gemini 4 Hydrogen (Orchestrator)` executed on an undocumented **`gemini-flash-worker-agy`** (`enum 1669`) endpoint.
+3. **Verified `thinking_tokens = 0` Collapses (Empty in Both Protobuf AND Transcript Text):** On `Gemini 4 Argon (Medium)`, `thinking_tokens = 0` spiked from **`0.3%` (`1/337`)** on Nov 12–13 to **`25.2%`** (Nov 16), **`19.1%`** (Nov 18), and **`64.9%` (`50/77`, median `0`)** on Nov 19. `Gemini 4 Carbon (Low)` hit **`100%` (`7/7`)** on Nov 17 before recovering (`0/12`, median `340`) on Nov 20. Cross-checking `transcript.jsonl` confirms **`216/216`** of these calls had literally empty `thinking` text.
+4. **Empty Failures Drain Quota + Three Post-Hotfix Structural Cache Leaks:** In session `e42289d0`, **`9` of `11`** image-generation requests returned `"image failed to generate: no image generated in response"` (only 2 images delivered, ending in **7 consecutive empty failures**) before attempt #12 hit `HTTP 429 RESOURCE_EXHAUSTED` (`2h40m4s` lockout). Even after the mid-November hotfix (`925` turns across Nov 19–20), three structural leaks persist: async `SYSTEM_MESSAGE` wakeups truncate `flash-worker` cache back to `~25K–27K` within `5s` (`51.1%–100%`); `Orchestrator (Neon)` model ping-pong (`71` switches) burned **`2.58×`** more uncached input than running `Carbon Medium` straight; and `Carbon Medium` still suffers random `27s` wipes plus a **`46.2%` eviction cliff at `180s` (`92.9%` `>300s`)**.
+5. **Bundled Google One 30 TB Refund Catch-22 & Hidden Time Cost:** Because AI Ultra is bundled with 30 TB Google Drive storage, Tier-1 Support's policy states that a standard refund immediately cancels the Google One membership and storage (blocking anyone storing >15 GB — here 3.5 TB + primary Gmail). Only after uploading raw SQLite traces and server `ResponseID`s did Tier-2 offer a non-cancelling refund option, which remains pending higher-specialist approval with no timeline. Measured server wait (`>=100K` TTFT `2.57×` slower on cold wipes: `5.75s → 14.76s`), degraded turns, and forced forensic/support time totaled **`6.7+` directly logged hours (`9.4h` with lockout)** — easily a full workday once human rework is included.
 
 Included in this repository:
-* **[`audit_antigravity_sqlite.py`](./audit_antigravity_sqlite.py)** — ~220-line zero-dependency, read-only Python 3 script so any Pro/Ultra subscriber on macOS, Linux, or Windows can audit their own local `~/.gemini/antigravity/conversations/*.db` files in 5 seconds.
-* **[`SUPPORT_TRANSCRIPT_REDACTED.md`](./SUPPORT_TRANSCRIPT_REDACTED.md)** — Full 45-minute verbatim Google One Support chat log (PII-scrubbed).
+* **[`audit_antigravity_sqlite.py`](./audit_antigravity_sqlite.py)** (`v1.1`) — Zero-dependency, read-only Python 3 script (`?immutable=1`, zero network calls, never reads prompts/credentials, strict `ResponseID` dedup + real step-timestamp gating) for macOS, Linux, and Windows.
+* **[`SUPPORT_TRANSCRIPT_REDACTED.md`](./SUPPORT_TRANSCRIPT_REDACTED.md)** — Full 43-minute verbatim Google One Support chat log (PII-scrubbed) + post-chat escalation email note.
 
-![SQLite Protobuf Billing Audit Summary](./images/01_sqlite_telemetry_audit.png)
+![SQLite Protobuf Billing Audit Summary v1.1](./images/01_sqlite_telemetry_audit.png)
 
 ---
 
 ## 1. Protobuf Billing Schema Verification (`gen_metadata`)
 
-Every Antigravity conversation database (`~/.gemini/antigravity/conversations/<uuid>.db`) is a standard SQLite 3 database containing a `gen_metadata` table. Each row stores a serialized protobuf `ChatModel` message returned by Google's backend with exact integer closure:
+Every Antigravity conversation database (`~/.gemini/antigravity/conversations/<uuid>.db`) is a standard SQLite 3 database containing a `gen_metadata` table storing serialized `ChatModel` protobuf messages returned by Google's backend.
+
+Across **`24,319` non-zero calls**, the integer identity **`usage.3 (total_output_tokens) == usage.9 (thinking_tokens) + usage.10 (response_output_tokens)`** holds with **`0` mismatches (`100.000%` exact closure)**:
 
 * `chatModel.field_19` (`string`): Actual backend model ID executed by Google's server
 * `chatModel.field_21` (`string`): UI model display name shown to the subscriber
+* `chatModel.field_11` / `field_12` (`google.protobuf.Duration`): Server TTFT / prefill wait (`d11`) and stream duration (`d12`)
 * `chatModel.field_4` (`Usage` submessage):
   * `usage.1` (`varint`): Internal model enum ID
-  * `usage.2` (`varint`): `uncached_input_tokens` (billed at 100% weight)
+  * `usage.2` (`varint`): `uncached_input_tokens` (full weight)
   * `usage.3` (`varint`): `total_output_tokens` (`== usage.9 + usage.10`)
-  * `usage.5` (`varint`): `cached_input_tokens` (KV cache read tokens; omitted in proto3 wire format when `0`)
+  * `usage.5` (`varint`): `cached_input_tokens` (KV cache read tokens; omitted in proto3 when `0`)
   * `usage.9` (`varint`): `thinking_tokens` (reasoning tokens; omitted when `0`)
   * `usage.10` (`varint`): `response_output_tokens` (visible text + tool calls)
   * `usage.11` (`string`): Google server-side `ResponseID`
 
 ---
 
-## 2. Finding #1: `0%` KV Cache Regression vs. 623-Turn Claude Control Group
+## 2. Finding #1: `0%` KV Cache Overbilling vs. Hosted Claude Control Group (v1.1 Strict)
 
-To rule out idle cache TTL expiration or transcript compaction changing the prompt prefix, the script filters strictly for:
-1. **Identical trajectory & identical backend model** as the immediately preceding turn;
-2. **Monotonically growing context** (`total_in >= 0.98 * prev_total_in`, ruling out context compaction);
-3. **Inter-turn gap `<= 45 seconds`** and context size `>= 15,000 tokens`.
+To eliminate idle TTL expiration, context compaction, forked-DB duplicates, or missing timestamps, `audit_antigravity_sqlite.py v1.1` enforces all five filters simultaneously:
+1. **Unique `ResponseID` (`usage.11`)** across all scanned databases;
+2. **Real per-step `transcript.jsonl` timestamps on BOTH previous and current turns** (never file `mtime`);
+3. **Identical trajectory & identical backend model (`field_19`)** as the immediately preceding turn;
+4. **Monotonically growing context** (`total_in >= 0.98 * prev_total_in`, ruling out compaction);
+5. **Context size `>= 15,000 tokens`** within `<= 45s` (ultra-strict) or `<= 300s` (5-min session window).
 
-| Model & Date Window | Strict Follow-ups (`<=45s`) | `0%` Cache Failures | Overall Cache Hit Rate | Overbilled Uncached Tokens (Strict `<=45s` Only) |
-| :--- | ---: | ---: | ---: | ---: |
-| **CONTROL: Hosted Claude Opus/Sonnet 5.5 (Nov 15–20 total)** | **623** | **0 (`0.0%`)** | **93.4% – 99.1%** | **0** |
-| `Gemini 4 Hydrogen (High)` — **Nov 13 (Baseline)** | 61 | **0 (`0.0%`)** | **97.0%** | 0 |
-| `Gemini 4 Hydrogen (High)` — **Nov 15 (Onset)** | 53 | **11 (`20.8%`)** | **71.0%** | 400,842 |
-| `Gemini 4 Hydrogen (High)` — **Nov 16 (Peak)** | 10 | **4 (`40.0%`)** | **53.7%** | 130,623 |
-| `Gemini 4 Carbon (High)` — **Nov 16** | 473 | 15 (`3.2%`) | 96.7% | 689,044 |
-| `Gemini 4 Carbon (High)` — **Nov 17 (Peak)** | 136 | **15 (`11.0%`)** *(14.7% @ `<=300s`)* | **86.4%** | 735,315 *(1,932,073 @ `<=300s`)* |
-| `Gemini 4 Carbon (High)` — **Nov 18** | 81 | **4 (`4.9%`)** *(11.5% @ `<=300s`)* | 93.8% | 270,204 *(2,003,702 @ `<=300s`)* |
-| `Gemini 4 Carbon (High)` — **Nov 19–20 (Post-Hotfix)** | 962 | **5 (`0.5%`)** | **95.9% – 97.3%** | 1,637,914 |
-| `Gemini 4 Carbon (Medium)` — **Nov 17 (Peak)** | 16 | **8 (`50.0%`)** | **45.1%** | 183,378 |
-| `Orchestrator (Carbon)` — **Nov 16–18** | 1,342 | **70 (`5.2%`)** | 83.9% – 93.4% | **8,515,562** |
+### Summary (Nov 15–20, 2026 — Reproducible via `python3 audit_antigravity_sqlite.py --since 2026-11-15 --until 2026-11-20`)
 
-Across all `<=300s` same-model follow-ups (`>=10k` tokens), **`~49.5 million` uncached Gemini input tokens** (`30.5M+` even under the `<=45s` strict non-compaction filter) were billed at full weight on `cached_in = 0` turns.
+| Cohort & Window | Strict Follow-up Turns | `0%` Cache Drops (`cached_in = 0`) | Overbilled Uncached Tokens |
+| :--- | ---: | ---: | ---: |
+| **CONTROL: Hosted Claude Opus/Sonnet 5.5 (`<= 45s`)** | **623** | **0 (`0.00%`)** | **0** |
+| **CONTROL: Hosted Claude Opus/Sonnet 5.5 (`<= 300s`)** | **648** | **0 (`0.00%`)** | **0** |
+| **Gemini 4 Family (`<= 45s`, ultra-strict)** | **15,509** | **276 (`1.78%`)** | **28,028,445** |
+| **Gemini 4 Family (`<= 300s`, 5-min window)** | **17,926** | **397 (`2.21%`)** | **50,650,659** |
 
-### Consecutive-Turn Raw Trace Examples (Suffixes Redacted Publicly; Full `ResponseID`s Submitted to Google Support)
+*(Full 9-day Nov 12–20 window `<= 300s`: `20,811` Gemini turns, `442` zero-cache drops, `54,180,009` overbilled uncached tokens; Claude `0 / 648`.)*
 
-**Example A — Pure `Gemini 4 Carbon (High)` (No orchestrator handoff, 945,019 uncached tokens billed across 25 seconds):**
+### Clean Zero-Loophole Raw Trace Examples (Zero Errors, Zero `SYSTEM_MESSAGE`, Zero Timeout, `<30s` Gaps)
+
+**Trace A — Pure `Gemini 4 Carbon (High)` (`d4eb10d7`, `+28s` gap, `350,781` full-price wipe mid-loop):**
 ```text
-idx=188 | step=538 | gemini-4-carbon | uncached_in=  9,343 | cached_in=459,379 (98.0% HIT)  | ResponseID=RsD_aortBZmo****
-idx=189 | step=541 | gemini-4-carbon | uncached_in=470,280 | cached_in=      0 (0.0% MISS!) | ResponseID=k8P_avL6B9bN****
-idx=190 | step=544 | gemini-4-carbon | uncached_in=474,739 | cached_in=      0 (0.0% MISS!) | ResponseID=q8P_arKjJ6-F****  [25s later]
-idx=191 | step=546 | gemini-4-carbon | uncached_in=  8,474 | cached_in=474,740 (98.2% HIT)  | ResponseID=xsP_aqaWPM_c****
+idx=38 | step=122 | 2026-11-19T00:40:51Z | gemini-4-carbon | uncached= 16,943 | cached=327,361 (95.1% HIT)  | ResponseID=lEX-aqj2IpWo****
+idx=39 | step=125 | 2026-11-19T00:41:19Z | gemini-4-carbon | uncached=350,781 | cached=      0 (0.0% MISS!) | ResponseID=r0X-aqPeJpj8****  [+28s]
+idx=40 | step=128 | 2026-11-19T00:41:44Z | gemini-4-carbon | uncached=  9,115 | cached=350,782 (97.5% HIT)  | ResponseID=yUX-auqiBYSW****  [+25s]
 ```
 
-**Example B — Orchestrator Sub-Worker (`7 of 10` consecutive same-model turns `<15s` apart hit `cached_in = 0`, billing 3,260,057 uncached tokens in 150 seconds):**
+**Trace B — Single-Model `Gemini 4 Argon (Medium)` (`14e9dadb`, `+24s` gap, `502,806` full-price wipe; prefix survived `5m46s` right after):**
 ```text
-idx=78..81, 84..85, 87 (9s–15s gaps) | gemini-flash-worker-agy | 7x cached_in=0 (456,250 -> 476,281 uncached_in each)
-ResponseIDs: wHT-apWMLs_l****, y3T-auazErDc****, -XT-avTQFv_b****, KXX-aoCaH__b****, ZHX-auGSEqqf****
+idx=143 | step=404 | 2026-11-18T10:06:55Z | gemini-4-argon | uncached=  2,566 | cached=491,231 (99.5% HIT)  | ResponseID=wHj9aqnNIdHv****
+idx=144 | step=408 | 2026-11-18T10:07:19Z | gemini-4-argon | uncached=502,806 | cached=      0 (0.0% MISS!) | ResponseID=2Hj9aujEI5z9****  [+24s]
+idx=145 | step=412 | 2026-11-18T10:13:05Z | gemini-4-argon | uncached=  5,539 | cached=502,807 (98.9% HIT)  | ResponseID=Mnr9avqCLubs****  [+5m46s]
 ```
-*(Additionally, every handoff between `Orchestrator` and its sub-worker invalidates the 450k+ KV cache across different model weights, compounding subscriber quota burn.)*
+
+**Trace C — Post-Hotfix Single-Model `Gemini 4 Carbon (Medium)` (`611de086`, `+27s` gap, `325,737` full-price wipe):**
+```text
+idx=419 | step=1059 | 2026-11-20T17:10:32Z | gemini-4-carbon | uncached=  2,307 | cached=323,074 (99.3% HIT)  | ResponseID=GX8Aa6eEH9my****
+idx=420 | step=1061 | 2026-11-20T17:10:59Z | gemini-4-carbon | uncached=325,737 | cached=      0 (0.0% MISS!) | ResponseID=NH8Aa8ixHM-Z****  [+27s]
+idx=421 | step=1063 | 2026-11-20T17:11:38Z | gemini-4-carbon | uncached=  2,499 | cached=323,688 (99.2% HIT)  | ResponseID=V38Aa6TPL5f6****  [+39s]
+```
 
 ---
 
-## 3. Finding #2: Undisclosed `-tiered` and `flash-worker` Backend Endpoints
+## 3. Finding #2: Undisclosed `-tiered` and `flash-worker` Backend Endpoints (Deduplicated)
 
-| Count | UI Label Shown to User (`field 21`) | Actual Server Model Executed (`field 19`) | Enum ID | Notes |
+| Unique Calls (Nov 12–20) | UI Label (`field 21`) | Actual Backend Model (`field 19`) | Enum | Thinking Distribution (`p50` / `mean` / `p90` / `p95`) |
 | ---: | :--- | :--- | ---: | :--- |
-| `6,699` | `Gemini 4 Hydrogen (Orchestrator)` | `gemini-flash-worker-agy` | `1669` | Distinct from standalone `gemini-4-hydrogen` (`1525–1528`); ~50% lower avg thinking tokens than `Hydrogen (XHigh)` |
-| `195` | `Gemini 4 Hydrogen (High)` *(Nov 12–16)* | `gemini-4-hydrogen` | `1525` | Pre-Nov 17 endpoint; daily mean thinking tokens: `440 – 2,630` |
-| `1,490` | `Gemini 4 Hydrogen (High)` *(Nov 17–20)* | **`gemini-4-hydrogen-tiered-high`** | `1530` | Silently switched Nov 17; daily mean thinking tokens dropped to **`369 – 628`** |
+| `195` | `Gemini 4 Hydrogen (High)` *(Nov 12–16, 19)* | `gemini-4-hydrogen` | `1525` | `p50=279` / `mean=1,053` / `p90=2,664` / **`p95=5,535`** |
+| `1,504` | `Gemini 4 Hydrogen (High)` *(Nov 17–20)* | **`gemini-4-hydrogen-tiered-high`** | `1530` | `p50=248` / **`mean=469 (-55.5%)`** / `p90=974 (-63%)` / **`p95=1,498 (-73%)`** |
+| `6,314` | `Gemini 4 Hydrogen (Orchestrator)` | **`gemini-flash-worker-agy`** | `1669` | Undocumented internal worker endpoint |
 | `70` | `(empty / unknown)` *(Nov 14–16)* | **`gemini-3.8-flash-tiered`** | `1322` | Undocumented tiered fallback endpoint |
 
 ---
 
-## 4. Finding #3: `thinking_tokens = 0` Spikes & Empty Responses Burning Quota to `HTTP 429`
+## 4. Finding #3: Verified `thinking_tokens = 0` Collapses & Empty Failures Burning Quota
 
-* **`Gemini 4 Argon (Medium)` Zero-Thinking Surge:**
-  * **Nov 12–13 (Baseline, `n=337`):** Only **1 call (`0.3%`)** returned `thinking_tokens = 0`.
-  * **Nov 16 (`n=103`):** **26 calls (`25.2%`)** returned `thinking_tokens = 0`.
-  * **Nov 18 (`n=696`):** **133 calls (`19.1%`)** returned `thinking_tokens = 0` (including 21 consecutive zero-thinking turns across a 155k-token debugging session, e.g., `ResponseID=PfP8aoOXNPuG****`).
-  * **Nov 19 (`n=77`):** **50 calls (`64.9%`)** returned `thinking_tokens = 0` (daily median thinking tokens collapsed to **`0`**).
-* **`Gemini 4 Carbon (Low)`:** Hit **`100%` (`7/7`)** `thinking_tokens = 0` on Nov 17, vs. **`0%` (`0/12`, median `340`)** on Nov 20. *(Note: Standalone `Gemini 4 Carbon (High)` did NOT exhibit `thinking_tokens = 0` in my dataset—its primary issue on Nov 17–18 was the `0%` KV cache regression above.)*
-* **Empty Server Failures Still Deducted Paid Quota:** On `2026-11-15 01:28:39Z – 01:31:15Z`, 9 consecutive failed requests returning `"image failed to generate: no image generated in response"` (zero output delivered) depleted model quota until request #10 threw `429 Too Many Requests: You have exhausted your capacity on this model (RESOURCE_EXHAUSTED)`.
+* **`Gemini 4 Argon (Medium)` Zero-Thinking Surge (`usage.9 == 0`, 100% cross-verified empty in `transcript.jsonl` `thinking` text):**
+  * **Nov 12–13 (Baseline, `n=337`):** `1` call (`0.3%`)
+  * **Nov 16 (`n=103`):** `26` calls (`25.2%`) — `26/26` empty in transcript
+  * **Nov 18 (`n=696`):** `133` calls (`19.1%`) — `133/133` empty in transcript (including 21 consecutive zero-thinking turns across a 155k-token debugging session, e.g., `ResponseID=PfP8aoOXNPuG****`)
+  * **Nov 19 (Peak, `n=77`):** **`50` calls (`64.9%`, daily median = `0`)** — `50/50` empty in transcript
+* **`Gemini 4 Carbon (Low)`:** Hit **`100%` (`7/7`)** zero-thinking on Nov 17 (`7/7` empty in transcript), vs. **`0%` (`0/12`, median `340`)** on Nov 20. *(Precision note: Standalone `Gemini 4 Carbon (High)` had `0/2,380` zero-thinking calls — its issue was KV cache overbilling.)*
+* **Empty Image-Generation Failures Triggered `HTTP 429` (`e42289d0`, `2026-11-15 01:28:25–01:31:15 UTC`):** Across `11` image requests, `9` returned `"image failed to generate: no image generated in response"` (only 2 images delivered, ending in **7 consecutive empty failures**), and attempt #12 immediately threw `429 Too Many Requests: You have exhausted your capacity on this model. Your quota will reset after 2h40m4s (RESOURCE_EXHAUSTED)`.
 
 ---
 
-## 5. Bundled Google One Storage Billing Catch-22 (PSA for Subscribers)
+## 5. Finding #4: Post-Hotfix Structural Cache Leaks & Fair Claude Comparison (Nov 19–20, 925 Turns)
 
-Because Google bundles developer AI Ultra quotas with **Google One cloud storage (30 TB)** under a single **$199.99/month** subscription, I contacted Google One Support (full PII-scrubbed chat log in [`SUPPORT_TRANSCRIPT_REDACTED.md`](./SUPPORT_TRANSCRIPT_REDACTED.md)) with the exact server `ResponseID`s and SQLite telemetry requesting a **non-cancelling service credit** for the Nov 15–20 regression window.
+Even after the mid-November hotfix (`Session A 611de086`: 439 turns, `9.07M` uncached; `Session B 80ccfd72`: 486 turns, `23.40M` uncached):
+1. **Client Harness Bug (`SYSTEM_MESSAGE` Truncation):** Async task/subagent `SYSTEM_MESSAGE` wakeups drop `gemini-flash-worker-agy` cached prefix back to `~25K–27K` within `5s–84s` (`23/45 = 51.1%` in Session B; `3/3 = 100%` in Session A, including a `420,939 → 27,311` drop).
+2. **`Orchestrator (Neon)` Model Ping-Pong (`2.58×` Uncached Penalty):** `71` planner/worker switches caused `51` major cache drops (`15.27M` tokens, `65.3%` of Session B's uncached input); returning to the planner after `>300s` missed cache **`90.3%` (`28/31`)**, making the "efficient" Orchestrator burn **`2.58×`** more uncached tokens than running flagship `Carbon Medium` straight.
+3. **Server-Side `180s` Eviction Cliff:** Continuous single-model `Carbon Medium` stayed `<3%` miss under `180s`, then jumped to **`46.2%` (`6/13`)** at `180–240s` and **`92.9%` (`13/14`)** past `300s`, alongside random `27s–73s` full resets.
+4. **Objective Claude Code Comparison:** Across `477` native Claude Code requests on the same Mac, overall cache read hit **`98.4%`** with **`0 / 460`** full resets inside 5 minutes (explicit contract 5-min TTL vs. Google's best-effort implicit pool). To be fair, Claude is not magic either: past 5 minutes it misses `100%`, charges a `1.25×` cache-write surcharge, and client prefix mutations can still invalidate its cache. The core problem is that Google hides per-turn cache wipes inside a black-box UI while draining paid subscriptions.
 
-* **Initial Tier-1 Support Stance:** Even after reviewing the issue, Google One Support initially stated:
-  > *"Google storage plan purchases are non-refundable... Per our Terms of Service, all sales are final. Before we proceed to request for a refund of your membership, I would like to let you know that when a Google One membership is refunded, it's cancelled immediately and you will no longer have access to expanded storage, benefits, and expert support offered by Google One."*
+---
 
-![Google One Bundled Storage Billing Catch-22](./images/02_support_storage_hostage.png)
+## 6. Bundled Google One 30 TB Policy Catch-22 & Real Total Cost
 
-* For any subscriber storing `>15 GB` (in my case, **3.5 TB** across Google Drive and Gmail), immediate cancellation locks Gmail send/receive and freezes Drive writes—creating a structural catch-22 where subscribers with >15 GB of data cannot accept standard Tier-1 refund relief for AI outages without disrupting Gmail and Drive.
-* **Tier-2 Escalation Outcome:** Only *after* explicitly declining standard cancellation and uploading the raw SQLite `gen_metadata` protobuf traces + server `ResponseID`s did Tier-2 Support reverse the initial "impossible/immediate-cancellation" stance and offer in writing:
-  > *"May I please know how would you like us to proceed as we can offer you either 2,000 AI credits or a refund of your last plan charge without cancelling your plan?"*
-  *(Selected the non-cancelling full refund of the last monthly charge; Support subsequently clarified that this option remains "under review for approval" by their higher specialists team via email with no committed timeframe.)*
+Because Google bundles developer AI Ultra compute with **Google One 30 TB storage** under one **$199.99/month** plan, requesting a refund in Google One Support triggers a structural catch-22 (full redacted chat in [`SUPPORT_TRANSCRIPT_REDACTED.md`](./SUPPORT_TRANSCRIPT_REDACTED.md)):
 
+* **Frontline Policy Trap (Polite Agent, Broken Bundling):** The frontline agent was polite and reading standard policy: *"Per our Terms of Service, all sales are final... when a Google One membership is refunded, it's cancelled immediately and you will no longer have access to expanded storage, benefits, and expert support."* For anyone storing `>15 GB` (here **3.5 TB** + primary Gmail), standard refund relief immediately threatens Gmail and Drive.
+* **Tier-2 Reversal Only After Forensic Protobufs:** After explicitly declining cancellation and uploading raw SQLite traces + server `ResponseID`s, Tier-2 offered *"either 2,000 AI credits or a refund of your last plan charge without cancelling your plan."* Selecting the non-cancelling refund triggered a polite post-chat confirmation email stating the case was escalated to higher specialists for approval — still with **no committed timeline and no decision yet**.
+
+![Google One Support Storage Bundling Catch-22](./images/02_support_storage_hostage.png)
 ![Google One Tier-2 Reversal After Raw SQLite Telemetry](./images/03_tier2_reversal_after_telemetry.png)
-* **Takeaway for Pro & Ultra Subscribers:** Tier-1 agents are constrained to a standard Google One cancellation-refund workflow that terminates Drive/Gmail storage; subscribers seeking compensation for AI quota bugs without losing storage must explicitly decline Tier-1 cancellation and escalate to Tier-2 with raw server `ResponseID`s (which remains subject to manual review with no committed SLA).
+
+* **Measured Hidden Time & Energy Cost (Why Sticker Price ≠ Real Cost):**
+  * On `>=100K` contexts, `0%`-cache wipes slowed median TTFT (`d11`) **`2.57×`** (`5.75s` warm across `13,378` turns vs. **`14.76s`** cold across `169` turns) — **`90.6 minutes` (`~1.5h`)** of TTFT waiting (`153.1 min` total turn wait) across `397` wipes (`<=300s`, Nov 15–20).
+  * `209` degraded zero-thinking turns added **`67.1 minutes` (`~1.1h`)** of direct waiting (before human rework).
+  * `e42289d0` imposed a **`2h 40m`** lockout; decoding DBs, redacting evidence, and fighting Support took **`4.1 hours`** of directly logged active work (`246 min`).
+  * **Directly logged by timestamps: `~6.7h` active (`9.4h` with lockout) — easily a full workday (`10+ hours`) once human rework and storage-cancellation anxiety are counted.**
 
 ---
 
-## 6. Reproduce on Your Own Machine (macOS / Linux / Windows)
+## 7. Reproduce on Your Own Machine (macOS / Linux / Windows)
 
-Requires only standard `python3` (zero `pip` packages; opens SQLite with `?immutable=1` read-only mode; never reads prompts or credentials):
+Standard Python 3 only — zero dependencies, `?immutable=1` read-only mode, zero network calls, never reads prompts or credentials:
 
 ```bash
 python3 audit_antigravity_sqlite.py
-```
-
-If your Antigravity data is stored in a custom directory, pass it as an argument:
-
-```bash
+# Optional date window filter:
+python3 audit_antigravity_sqlite.py --since 2026-11-15 --until 2026-11-20
+# Optional custom directory:
 python3 audit_antigravity_sqlite.py /path/to/custom/antigravity
 ```

@@ -142,3 +142,8 @@ Before we end the chat, I need to have this clearly confirmed in writing on Case
 
 **[16:37] [Agent] • Support Specialist:**
 Is there anything else I can help you with today?
+
+---
+
+### Post-Chat Update (Nov 20–21, 2026)
+Shortly after the live chat ended, the frontline specialist politely sent a confirmation email under Case ID `[REDACTED_CASE_ID]` confirming that the non-cancelling refund request had been escalated to higher specialists for approval. As of this update, no approval timeline and no final decision/refund have been provided.
